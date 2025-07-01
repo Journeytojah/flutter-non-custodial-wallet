@@ -1,10 +1,12 @@
 import 'dart:convert';
-import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart';
 import 'package:web3dart/crypto.dart';
 import 'package:web3dart/web3dart.dart';
+import 'package:bip39_mnemonic/bip39_mnemonic.dart';
+import 'package:bip32/bip32.dart' as bip32;
 
 void main() {
   runApp(const MyApp());
@@ -39,6 +41,7 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   final EthereumWallet _wallet = EthereumWallet();
   String _walletAddress = 'No wallet yet.';
+  String _seedPhrase = '';
 
   final TextEditingController _recipientController = TextEditingController();
   final TextEditingController _amountController = TextEditingController();
@@ -52,15 +55,18 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _loadWallet() async {
     EthereumAddress? address = await _wallet.getWalletAddress();
+    String? seedPhrase = await _wallet.getSeedPhrase();
     setState(() {
       _walletAddress = address?.hex ?? 'No wallet found.';
+      _seedPhrase = seedPhrase ?? '';
     });
   }
 
   Future<void> _createWallet() async {
-    String address = await _wallet.createWallet();
+    var result = await _wallet.createWallet();
     setState(() {
-      _walletAddress = address;
+      _walletAddress = result['address'] ?? '';
+      _seedPhrase = result['seedPhrase'] ?? '';
     });
   }
 
@@ -110,6 +116,23 @@ class _MyHomePageState extends State<MyHomePage> {
                 style: const TextStyle(fontSize: 16, color: Colors.blue),
                 textAlign: TextAlign.center),
             const SizedBox(height: 20),
+            if (_seedPhrase.isNotEmpty) ...[
+              const Text('Seed Phrase:',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey),
+                  borderRadius: BorderRadius.circular(8),
+                  color: Colors.grey[50],
+                ),
+                child: SelectableText(_seedPhrase,
+                    style: const TextStyle(fontSize: 14, color: Colors.black87),
+                    textAlign: TextAlign.center),
+              ),
+              const SizedBox(height: 20),
+            ],
             TextField(
               controller: _recipientController,
               decoration: const InputDecoration(
@@ -165,7 +188,7 @@ class EthereumWallet {
 
     final transaction = Transaction(
       to: EthereumAddress.fromHex(recipient),
-      value: EtherAmount.fromUnitAndValue(EtherUnit.wei, amount),
+      value: EtherAmount.fromBigInt(EtherUnit.wei, amount),
     );
 
     // Sign the transaction
@@ -199,17 +222,37 @@ class EthereumWallet {
     }
   }
 
-  Future<String> createWallet() async {
-    final rng = Random.secure();
-    final EthPrivateKey privateKey = EthPrivateKey.createRandom(rng);
-
+  Future<Map<String, String>> createWallet() async {
+    // Generate a 12-word mnemonic phrase (128-bit entropy)
+    final mnemonic = Mnemonic.generate(Language.english, entropyLength: 128);
+    final seedPhrase = mnemonic.sentence;
+    
+    // Generate seed from mnemonic
+    final seed = mnemonic.seed;
+    
+    // Use BIP32 to create master key from seed
+    final masterKey = bip32.BIP32.fromSeed(Uint8List.fromList(seed));
+    
+    // Derive Ethereum key using BIP44 path: m/44'/60'/0'/0/0
+    // This matches MetaMask's derivation path
+    final derivedKey = masterKey
+        .derivePath("m/44'/60'/0'/0/0");
+    
+    // Use the derived private key
+    final privateKeyBytes = derivedKey.privateKey!;
+    final privateKey = EthPrivateKey(privateKeyBytes);
+    
     final String privateKeyHex = privateKey.privateKeyInt.toRadixString(16);
     final EthereumAddress address = privateKey.address;
 
-    // Store the private key securely
+    // Store both the private key and seed phrase securely
     await _storage.write(key: 'private_key', value: privateKeyHex);
+    await _storage.write(key: 'seed_phrase', value: seedPhrase);
 
-    return address.hex;
+    return {
+      'address': address.hex,
+      'seedPhrase': seedPhrase,
+    };
   }
 
   Future<EthereumAddress?> getWalletAddress() async {
@@ -220,5 +263,9 @@ class EthereumWallet {
 
     final EthPrivateKey privateKey = EthPrivateKey.fromHex(privateKeyHex);
     return privateKey.address;
+  }
+
+  Future<String?> getSeedPhrase() async {
+    return await _storage.read(key: 'seed_phrase');
   }
 }
