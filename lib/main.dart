@@ -70,6 +70,63 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
+  Future<void> _importWallet() async {
+    String? seedPhrase = await _showImportDialog();
+    if (seedPhrase != null && seedPhrase.isNotEmpty) {
+      try {
+        var result = await _wallet.importWallet(seedPhrase);
+        setState(() {
+          _walletAddress = result['address'] ?? '';
+          _seedPhrase = result['seedPhrase'] ?? '';
+          _transactionStatus = 'Wallet imported successfully!';
+        });
+      } catch (e) {
+        setState(() {
+          _transactionStatus = 'Failed to import wallet: ${e.toString()}';
+        });
+      }
+    }
+  }
+
+  Future<String?> _showImportDialog() async {
+    TextEditingController importController = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Import Wallet'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Enter your 12-word seed phrase:'),
+              const SizedBox(height: 16),
+              TextField(
+                controller: importController,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  hintText: 'word1 word2 word3 ...',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+            TextButton(
+              child: const Text('Import'),
+              onPressed: () {
+                Navigator.of(context).pop(importController.text.trim());
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _sendTransaction() async {
     final String recipient = _recipientController.text;
     final String amountStr = _amountController.text;
@@ -159,11 +216,24 @@ class _MyHomePageState extends State<MyHomePage> {
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _createWallet,
-        tooltip: 'Create Wallet',
-        child: const Icon(Icons.account_balance_wallet),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+      floatingActionButton: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          FloatingActionButton(
+            onPressed: _importWallet,
+            tooltip: 'Import Wallet',
+            heroTag: 'import',
+            child: const Icon(Icons.file_download),
+          ),
+          const SizedBox(height: 16),
+          FloatingActionButton(
+            onPressed: _createWallet,
+            tooltip: 'Create Wallet',
+            heroTag: 'create',
+            child: const Icon(Icons.account_balance_wallet),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -267,5 +337,41 @@ class EthereumWallet {
 
   Future<String?> getSeedPhrase() async {
     return await _storage.read(key: 'seed_phrase');
+  }
+
+  Future<Map<String, String>> importWallet(String seedPhrase) async {
+    // Validate the seed phrase format and word count
+    final words = seedPhrase.trim().split(' ');
+    if (words.length != 12 && words.length != 24) {
+      throw Exception('Seed phrase must be 12 or 24 words');
+    }
+    
+    // Validate the seed phrase using BIP39
+    final mnemonic = Mnemonic.fromSentence(seedPhrase.trim(), Language.english);
+    
+    // Generate seed from mnemonic
+    final seed = mnemonic.seed;
+    
+    // Use BIP32 to create master key from seed
+    final masterKey = bip32.BIP32.fromSeed(Uint8List.fromList(seed));
+    
+    // Derive Ethereum key using BIP44 path: m/44'/60'/0'/0/0
+    final derivedKey = masterKey.derivePath("m/44'/60'/0'/0/0");
+    
+    // Use the derived private key
+    final privateKeyBytes = derivedKey.privateKey!;
+    final privateKey = EthPrivateKey(privateKeyBytes);
+    
+    final String privateKeyHex = privateKey.privateKeyInt.toRadixString(16);
+    final EthereumAddress address = privateKey.address;
+
+    // Store both the private key and seed phrase securely
+    await _storage.write(key: 'private_key', value: privateKeyHex);
+    await _storage.write(key: 'seed_phrase', value: seedPhrase.trim());
+
+    return {
+      'address': address.hex,
+      'seedPhrase': seedPhrase.trim(),
+    };
   }
 }
