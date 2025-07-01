@@ -65,7 +65,7 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _clearDataOnFreshInstall() async {
     final prefs = await SharedPreferences.getInstance();
     final hasRunBefore = prefs.getBool('has_run_before') ?? false;
-    
+
     if (!hasRunBefore) {
       // Fresh install - clear any persisted secure storage data
       await _wallet.clearWallet();
@@ -199,13 +199,17 @@ class _MyHomePageState extends State<MyHomePage> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
             if (!_hasWallet) ...[
-              const Icon(Icons.account_balance_wallet_outlined, 
+              const Icon(Icons.account_balance_wallet_outlined,
                   size: 80, color: Colors.grey),
               const SizedBox(height: 20),
               const Text('No Wallet Found',
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.grey)),
+                  style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey)),
               const SizedBox(height: 10),
-              const Text('Create a new wallet or import an existing one to get started.',
+              const Text(
+                  'Create a new wallet or import an existing one to get started.',
                   style: TextStyle(fontSize: 16, color: Colors.grey),
                   textAlign: TextAlign.center),
               const SizedBox(height: 40),
@@ -236,7 +240,8 @@ class _MyHomePageState extends State<MyHomePage> {
               TextField(
                 controller: _recipientController,
                 decoration: const InputDecoration(
-                    labelText: "Recipient Address", border: OutlineInputBorder()),
+                    labelText: "Recipient Address",
+                    border: OutlineInputBorder()),
               ),
               const SizedBox(height: 10),
               TextField(
@@ -340,22 +345,21 @@ class EthereumWallet {
     // Generate a 12-word mnemonic phrase (128-bit entropy)
     final mnemonic = Mnemonic.generate(Language.english, entropyLength: 128);
     final seedPhrase = mnemonic.sentence;
-    
+
     // Generate seed from mnemonic
     final seed = mnemonic.seed;
-    
+
     // Use BIP32 to create master key from seed
     final masterKey = bip32.BIP32.fromSeed(Uint8List.fromList(seed));
-    
+
     // Derive Ethereum key using BIP44 path: m/44'/60'/0'/0/0
     // This matches MetaMask's derivation path
-    final derivedKey = masterKey
-        .derivePath("m/44'/60'/0'/0/0");
-    
+    final derivedKey = masterKey.derivePath("m/44'/60'/0'/0/0");
+
     // Use the derived private key
     final privateKeyBytes = derivedKey.privateKey!;
     final privateKey = EthPrivateKey(privateKeyBytes);
-    
+
     final String privateKeyHex = privateKey.privateKeyInt.toRadixString(16);
     final EthereumAddress address = privateKey.address;
 
@@ -394,23 +398,23 @@ class EthereumWallet {
     if (words.length != 12 && words.length != 24) {
       throw Exception('Seed phrase must be 12 or 24 words');
     }
-    
+
     // Validate the seed phrase using BIP39
     final mnemonic = Mnemonic.fromSentence(seedPhrase.trim(), Language.english);
-    
+
     // Generate seed from mnemonic
     final seed = mnemonic.seed;
-    
+
     // Use BIP32 to create master key from seed
     final masterKey = bip32.BIP32.fromSeed(Uint8List.fromList(seed));
-    
+
     // Derive Ethereum key using BIP44 path: m/44'/60'/0'/0/0
     final derivedKey = masterKey.derivePath("m/44'/60'/0'/0/0");
-    
+
     // Use the derived private key
     final privateKeyBytes = derivedKey.privateKey!;
     final privateKey = EthPrivateKey(privateKeyBytes);
-    
+
     final String privateKeyHex = privateKey.privateKeyInt.toRadixString(16);
     final EthereumAddress address = privateKey.address;
 
