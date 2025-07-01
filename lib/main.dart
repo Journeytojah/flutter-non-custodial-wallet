@@ -7,6 +7,7 @@ import 'package:web3dart/crypto.dart';
 import 'package:web3dart/web3dart.dart';
 import 'package:bip39_mnemonic/bip39_mnemonic.dart';
 import 'package:bip32/bip32.dart' as bip32;
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   runApp(const MyApp());
@@ -42,6 +43,7 @@ class _MyHomePageState extends State<MyHomePage> {
   final EthereumWallet _wallet = EthereumWallet();
   String _walletAddress = 'No wallet yet.';
   String _seedPhrase = '';
+  bool _hasWallet = false;
 
   final TextEditingController _recipientController = TextEditingController();
   final TextEditingController _amountController = TextEditingController();
@@ -50,23 +52,51 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
-    _loadWallet();
+    _initializeApp();
+  }
+
+  Future<void> _initializeApp() async {
+    // Check if this is a fresh install and clear old secure storage data
+    await _clearDataOnFreshInstall();
+    // Then load any existing wallet
+    await _loadWallet();
+  }
+
+  Future<void> _clearDataOnFreshInstall() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hasRunBefore = prefs.getBool('has_run_before') ?? false;
+    
+    if (!hasRunBefore) {
+      // Fresh install - clear any persisted secure storage data
+      await _wallet.clearWallet();
+      await prefs.setBool('has_run_before', true);
+    }
   }
 
   Future<void> _loadWallet() async {
     EthereumAddress? address = await _wallet.getWalletAddress();
     String? seedPhrase = await _wallet.getSeedPhrase();
     setState(() {
-      _walletAddress = address?.hex ?? 'No wallet found.';
-      _seedPhrase = seedPhrase ?? '';
+      if (address != null && seedPhrase != null) {
+        _walletAddress = address.hex;
+        _seedPhrase = seedPhrase;
+        _hasWallet = true;
+      } else {
+        _walletAddress = 'No wallet yet.';
+        _seedPhrase = '';
+        _hasWallet = false;
+      }
     });
   }
 
   Future<void> _createWallet() async {
+    // Clear any existing wallet data first
+    await _wallet.clearWallet();
     var result = await _wallet.createWallet();
     setState(() {
       _walletAddress = result['address'] ?? '';
       _seedPhrase = result['seedPhrase'] ?? '';
+      _hasWallet = true;
     });
   }
 
@@ -78,6 +108,7 @@ class _MyHomePageState extends State<MyHomePage> {
         setState(() {
           _walletAddress = result['address'] ?? '';
           _seedPhrase = result['seedPhrase'] ?? '';
+          _hasWallet = true;
           _transactionStatus = 'Wallet imported successfully!';
         });
       } catch (e) {
@@ -167,13 +198,24 @@ class _MyHomePageState extends State<MyHomePage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
-            const Text('Ethereum Wallet Address:',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            SelectableText(_walletAddress,
-                style: const TextStyle(fontSize: 16, color: Colors.blue),
-                textAlign: TextAlign.center),
-            const SizedBox(height: 20),
-            if (_seedPhrase.isNotEmpty) ...[
+            if (!_hasWallet) ...[
+              const Icon(Icons.account_balance_wallet_outlined, 
+                  size: 80, color: Colors.grey),
+              const SizedBox(height: 20),
+              const Text('No Wallet Found',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.grey)),
+              const SizedBox(height: 10),
+              const Text('Create a new wallet or import an existing one to get started.',
+                  style: TextStyle(fontSize: 16, color: Colors.grey),
+                  textAlign: TextAlign.center),
+              const SizedBox(height: 40),
+            ] else ...[
+              const Text('Ethereum Wallet Address:',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              SelectableText(_walletAddress,
+                  style: const TextStyle(fontSize: 16, color: Colors.blue),
+                  textAlign: TextAlign.center),
+              const SizedBox(height: 20),
               const Text('Seed Phrase:',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 10),
@@ -190,23 +232,25 @@ class _MyHomePageState extends State<MyHomePage> {
               ),
               const SizedBox(height: 20),
             ],
-            TextField(
-              controller: _recipientController,
-              decoration: const InputDecoration(
-                  labelText: "Recipient Address", border: OutlineInputBorder()),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _amountController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                  labelText: "Amount in ETH", border: OutlineInputBorder()),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _sendTransaction,
-              child: const Text("Send Transaction"),
-            ),
+            if (_hasWallet) ...[
+              TextField(
+                controller: _recipientController,
+                decoration: const InputDecoration(
+                    labelText: "Recipient Address", border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _amountController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                    labelText: "Amount in ETH", border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _sendTransaction,
+                child: const Text("Send Transaction"),
+              ),
+            ],
             const SizedBox(height: 10),
             Text(_transactionStatus,
                 style: const TextStyle(
@@ -337,6 +381,11 @@ class EthereumWallet {
 
   Future<String?> getSeedPhrase() async {
     return await _storage.read(key: 'seed_phrase');
+  }
+
+  Future<void> clearWallet() async {
+    await _storage.delete(key: 'private_key');
+    await _storage.delete(key: 'seed_phrase');
   }
 
   Future<Map<String, String>> importWallet(String seedPhrase) async {

@@ -40,6 +40,7 @@ dependencies:
   flutter_secure_storage: ^9.2.4
   bip39_mnemonic: ^3.0.9
   bip32: ^2.0.0
+  shared_preferences: ^2.3.2
 
 dev_dependencies:
   flutter_test:
