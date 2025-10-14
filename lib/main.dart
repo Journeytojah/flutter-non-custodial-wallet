@@ -16,7 +16,6 @@ void main() {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -47,7 +46,10 @@ class _MyHomePageState extends State<MyHomePage> {
 
   final TextEditingController _recipientController = TextEditingController();
   final TextEditingController _amountController = TextEditingController();
+  final TextEditingController _tokenAddressController = TextEditingController();
+  final TextEditingController _jwtTokenController = TextEditingController();
   String _transactionStatus = "";
+  bool _isTokenTransfer = false; // Toggle between native and token transfer
 
   @override
   void initState() {
@@ -56,10 +58,9 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _initializeApp() async {
-    // Check if this is a fresh install and clear old secure storage data
     await _clearDataOnFreshInstall();
-    // Then load any existing wallet
     await _loadWallet();
+    await _loadJwtToken();
   }
 
   Future<void> _clearDataOnFreshInstall() async {
@@ -67,7 +68,6 @@ class _MyHomePageState extends State<MyHomePage> {
     final hasRunBefore = prefs.getBool('has_run_before') ?? false;
 
     if (!hasRunBefore) {
-      // Fresh install - clear any persisted secure storage data
       await _wallet.clearWallet();
       await prefs.setBool('has_run_before', true);
     }
@@ -89,8 +89,14 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
+  Future<void> _loadJwtToken() async {
+    String? token = await _wallet.getJwtToken();
+    if (token != null) {
+      _jwtTokenController.text = token;
+    }
+  }
+
   Future<void> _createWallet() async {
-    // Clear any existing wallet data first
     await _wallet.clearWallet();
     var result = await _wallet.createWallet();
     setState(() {
@@ -158,9 +164,24 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
+  Future<void> _saveJwtToken() async {
+    final token = _jwtTokenController.text.trim();
+    if (token.isNotEmpty) {
+      await _wallet.saveJwtToken(token);
+      setState(() {
+        _transactionStatus = 'JWT Token saved successfully!';
+      });
+    } else {
+      setState(() {
+        _transactionStatus = 'Please enter a valid JWT token';
+      });
+    }
+  }
+
   Future<void> _sendTransaction() async {
     final String recipient = _recipientController.text;
     final String amountStr = _amountController.text;
+
     if (recipient.isEmpty || amountStr.isEmpty) {
       setState(() {
         _transactionStatus = 'Recipient and amount are required.';
@@ -168,16 +189,45 @@ class _MyHomePageState extends State<MyHomePage> {
       return;
     }
 
-    final BigInt amount =
-        BigInt.from(double.parse(amountStr) * 1e18); // Convert ETH to wei
+    if (_isTokenTransfer && _tokenAddressController.text.isEmpty) {
+      setState(() {
+        _transactionStatus = 'Token address is required for token transfers.';
+      });
+      return;
+    }
+
+    String? token = await _wallet.getJwtToken();
+    if (token == null || token.isEmpty) {
+      setState(() {
+        _transactionStatus = 'Please set JWT token first.';
+      });
+      return;
+    }
+
+    final BigInt amount = BigInt.from(double.parse(amountStr) * 1e18);
     setState(() {
       _transactionStatus = 'Signing transaction...';
     });
 
     try {
-      await _wallet.sendSignedTransaction(recipient, amount, 31337);
+      if (_isTokenTransfer) {
+        // ERC20 Token Transfer
+        await _wallet.sendSignedTokenTransaction(
+          _tokenAddressController.text,
+          recipient,
+          amount,
+          3502, // JFIN Testnet
+        );
+      } else {
+        // Native Token Transfer
+        await _wallet.sendSignedTransaction(
+          recipient,
+          amount,
+          3502, // JFIN Testnet
+        );
+      }
       setState(() {
-        _transactionStatus = 'Transaction sent successfully.';
+        _transactionStatus = 'Transaction sent successfully!';
       });
     } catch (e) {
       setState(() {
@@ -193,7 +243,7 @@ class _MyHomePageState extends State<MyHomePage> {
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         title: Text(widget.title),
       ),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -234,9 +284,62 @@ class _MyHomePageState extends State<MyHomePage> {
                     style: const TextStyle(fontSize: 14, color: Colors.black87),
                     textAlign: TextAlign.center),
               ),
+              const SizedBox(height: 30),
+              const Divider(thickness: 2),
               const SizedBox(height: 20),
-            ],
-            if (_hasWallet) ...[
+              const Text('JWT Token (Required for API):',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _jwtTokenController,
+                decoration: const InputDecoration(
+                    labelText: "JWT Token",
+                    border: OutlineInputBorder(),
+                    hintText: "Paste your JWT token here"),
+                maxLines: 3,
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton(
+                onPressed: _saveJwtToken,
+                child: const Text("Save JWT Token"),
+              ),
+              const SizedBox(height: 30),
+              const Divider(thickness: 2),
+              const SizedBox(height: 20),
+              const Text('Send Transaction:',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 10),
+
+              // Toggle between native and token transfer
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text('Native Token'),
+                  Switch(
+                    value: _isTokenTransfer,
+                    onChanged: (value) {
+                      setState(() {
+                        _isTokenTransfer = value;
+                      });
+                    },
+                  ),
+                  const Text('ERC20 Token'),
+                ],
+              ),
+              const SizedBox(height: 10),
+
+              // Show token address field only for token transfers
+              if (_isTokenTransfer) ...[
+                TextField(
+                  controller: _tokenAddressController,
+                  decoration: const InputDecoration(
+                      labelText: "Token Contract Address",
+                      border: OutlineInputBorder(),
+                      hintText: "0x..."),
+                ),
+                const SizedBox(height: 10),
+              ],
+
               TextField(
                 controller: _recipientController,
                 decoration: const InputDecoration(
@@ -247,21 +350,51 @@ class _MyHomePageState extends State<MyHomePage> {
               TextField(
                 controller: _amountController,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                    labelText: "Amount in ETH", border: OutlineInputBorder()),
+                decoration: InputDecoration(
+                    labelText: _isTokenTransfer
+                        ? "Amount in Tokens"
+                        : "Amount in JFIN",
+                    border: const OutlineInputBorder()),
               ),
               const SizedBox(height: 20),
               ElevatedButton(
                 onPressed: _sendTransaction,
-                child: const Text("Send Transaction"),
+                style: ElevatedButton.styleFrom(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+                ),
+                child: Text(
+                  _isTokenTransfer
+                      ? "Send Token Transfer"
+                      : "Send Native Transfer",
+                  style: const TextStyle(fontSize: 16),
+                ),
               ),
             ],
-            const SizedBox(height: 10),
-            Text(_transactionStatus,
-                style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.red)),
+            const SizedBox(height: 20),
+            if (_transactionStatus.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: _transactionStatus.contains('success')
+                      ? Colors.green[50]
+                      : Colors.red[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: _transactionStatus.contains('success')
+                        ? Colors.green
+                        : Colors.red,
+                  ),
+                ),
+                child: Text(_transactionStatus,
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: _transactionStatus.contains('success')
+                            ? Colors.green[900]
+                            : Colors.red[900]),
+                    textAlign: TextAlign.center),
+              ),
           ],
         ),
       ),
@@ -288,17 +421,30 @@ class _MyHomePageState extends State<MyHomePage> {
 }
 
 class EthereumWallet {
-  final FlutterSecureStorage _storage = FlutterSecureStorage();
+  final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
   final Web3Client client;
-  final String apiUrl = "http://localhost:3000/sendTransaction";
 
-  EthereumWallet() : client = Web3Client('http://127.0.0.1:8545', Client());
+  final String baseUrl;
 
+  EthereumWallet({
+    this.baseUrl = "http://localhost:50002",
+  }) : client = Web3Client('https://rpc.testnet.jfinchain.com', Client());
+
+  String get apiUrl => "$baseUrl/v1/customers/wallets/transactions";
+
+  Future<void> saveJwtToken(String token) async {
+    await _storage.write(key: 'jwt_token', value: token);
+  }
+
+  Future<String?> getJwtToken() async {
+    return await _storage.read(key: 'jwt_token');
+  }
+
+  // Sign native token transfer
   Future<String> signTransaction(
       String recipient, BigInt amount, int chainId) async {
-    final storage = FlutterSecureStorage();
-    String? privateKeyHex = await storage.read(key: 'private_key');
+    String? privateKeyHex = await _storage.read(key: 'private_key');
     if (privateKeyHex == null) {
       throw Exception('No private key found.');
     }
@@ -310,7 +456,6 @@ class EthereumWallet {
       value: EtherAmount.fromBigInt(EtherUnit.wei, amount),
     );
 
-    // Sign the transaction
     final signedTx = await client.signTransaction(credentials, transaction,
         chainId: chainId);
 
@@ -319,51 +464,122 @@ class EthereumWallet {
     return bytesToHex(signedTx);
   }
 
+  // Sign ERC20 token transfer
+  Future<String> signTokenTransaction(
+      String tokenAddress, String recipient, BigInt amount, int chainId) async {
+    String? privateKeyHex = await _storage.read(key: 'private_key');
+    if (privateKeyHex == null) {
+      throw Exception('No private key found.');
+    }
+
+    final EthPrivateKey credentials = EthPrivateKey.fromHex(privateKeyHex);
+
+    // ERC20 transfer function signature: transfer(address,uint256)
+    // Function selector: 0xa9059cbb
+    final transferFunctionSelector = hexToBytes('a9059cbb');
+
+    // Encode recipient address (32 bytes, padded)
+    final recipientAddress = EthereumAddress.fromHex(recipient);
+    final recipientBytes = recipientAddress.addressBytes;
+    final paddedRecipient = Uint8List(32);
+    paddedRecipient.setRange(12, 32, recipientBytes); // Pad left with zeros
+
+    // Encode amount (32 bytes, big-endian)
+    final amountBytes = Uint8List(32);
+    final amountHex = amount.toRadixString(16).padLeft(64, '0');
+    final amountBytesList = hexToBytes(amountHex);
+    amountBytes.setAll(0, amountBytesList);
+
+    // Combine: function selector + recipient + amount
+    final data = Uint8List.fromList([
+      ...transferFunctionSelector,
+      ...paddedRecipient,
+      ...amountBytes,
+    ]);
+
+    print('Token transfer data: ${bytesToHex(data)}');
+
+    final transaction = Transaction(
+      to: EthereumAddress.fromHex(tokenAddress),
+      value: EtherAmount.zero(), // No native token sent, only ERC20
+      data: data,
+    );
+
+    final signedTx = await client.signTransaction(credentials, transaction,
+        chainId: chainId);
+
+    print('Signed token transaction: ${bytesToHex(signedTx)}');
+
+    return bytesToHex(signedTx);
+  }
+
+  // Send native token transaction
   Future<void> sendSignedTransaction(
       String recipient, BigInt amount, int chainId) async {
     String signedTx = await signTransaction(recipient, amount, chainId);
+    await _sendToApi(signedTx);
+  }
 
-    // Send the signed transaction to the server
+  // Send ERC20 token transaction
+  Future<void> sendSignedTokenTransaction(
+      String tokenAddress, String recipient, BigInt amount, int chainId) async {
+    String signedTx =
+        await signTokenTransaction(tokenAddress, recipient, amount, chainId);
+    await _sendToApi(signedTx);
+  }
+
+  // Common method to send signed transaction to API
+  Future<void> _sendToApi(String signedTx) async {
+    if (!signedTx.startsWith('0x')) {
+      signedTx = '0x$signedTx';
+    }
+
+    String? token = await getJwtToken();
+    if (token == null || token.isEmpty) {
+      throw Exception('JWT token is required. Please set it first.');
+    }
+
+    print('Sending transaction to API: $apiUrl');
+    print('Signed transaction hex: $signedTx');
+
     final response = await post(
       Uri.parse(apiUrl),
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
       },
       body: jsonEncode({
-        'signedTransaction': signedTx,
+        'signedTxHex': signedTx,
       }),
     );
 
+    print('Response status: ${response.statusCode}');
+    print('Response body: ${response.body}');
+
     if (response.statusCode == 200) {
-      print('Transaction sent successfully: ${response.body}');
+      final responseData = jsonDecode(response.body);
+      final data = responseData['data'];
+      print('Transaction sent successfully!');
+      print('Transaction Hash: ${data['txHash']}');
+      print('Explorer URL: ${data['explorerUrl']}');
+      print('Status: ${data['status']}');
     } else {
       print('Failed to send transaction: ${response.body}');
+      throw Exception('Failed to send transaction: ${response.body}');
     }
   }
 
   Future<Map<String, String>> createWallet() async {
-    // Generate a 12-word mnemonic phrase (128-bit entropy)
     final mnemonic = Mnemonic.generate(Language.english, entropyLength: 128);
     final seedPhrase = mnemonic.sentence;
-
-    // Generate seed from mnemonic
     final seed = mnemonic.seed;
-
-    // Use BIP32 to create master key from seed
     final masterKey = bip32.BIP32.fromSeed(Uint8List.fromList(seed));
-
-    // Derive Ethereum key using BIP44 path: m/44'/60'/0'/0/0
-    // This matches MetaMask's derivation path
     final derivedKey = masterKey.derivePath("m/44'/60'/0'/0/0");
-
-    // Use the derived private key
     final privateKeyBytes = derivedKey.privateKey!;
     final privateKey = EthPrivateKey(privateKeyBytes);
-
     final String privateKeyHex = privateKey.privateKeyInt.toRadixString(16);
     final EthereumAddress address = privateKey.address;
 
-    // Store both the private key and seed phrase securely
     await _storage.write(key: 'private_key', value: privateKeyHex);
     await _storage.write(key: 'seed_phrase', value: seedPhrase);
 
@@ -393,32 +609,20 @@ class EthereumWallet {
   }
 
   Future<Map<String, String>> importWallet(String seedPhrase) async {
-    // Validate the seed phrase format and word count
     final words = seedPhrase.trim().split(' ');
     if (words.length != 12 && words.length != 24) {
       throw Exception('Seed phrase must be 12 or 24 words');
     }
 
-    // Validate the seed phrase using BIP39
     final mnemonic = Mnemonic.fromSentence(seedPhrase.trim(), Language.english);
-
-    // Generate seed from mnemonic
     final seed = mnemonic.seed;
-
-    // Use BIP32 to create master key from seed
     final masterKey = bip32.BIP32.fromSeed(Uint8List.fromList(seed));
-
-    // Derive Ethereum key using BIP44 path: m/44'/60'/0'/0/0
     final derivedKey = masterKey.derivePath("m/44'/60'/0'/0/0");
-
-    // Use the derived private key
     final privateKeyBytes = derivedKey.privateKey!;
     final privateKey = EthPrivateKey(privateKeyBytes);
-
     final String privateKeyHex = privateKey.privateKeyInt.toRadixString(16);
     final EthereumAddress address = privateKey.address;
 
-    // Store both the private key and seed phrase securely
     await _storage.write(key: 'private_key', value: privateKeyHex);
     await _storage.write(key: 'seed_phrase', value: seedPhrase.trim());
 
