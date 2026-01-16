@@ -8,6 +8,7 @@ import 'package:web3dart/web3dart.dart';
 import 'package:bip39_mnemonic/bip39_mnemonic.dart';
 import 'package:bip32/bip32.dart' as bip32;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'services/meta_tx_service.dart';
 
 void main() {
   runApp(const MyApp());
@@ -44,6 +45,10 @@ class _MyHomePageState extends State<MyHomePage> {
   String _seedPhrase = '';
   bool _hasWallet = false;
 
+  bool _useGasless = false;
+  final TextEditingController _forwarderController = TextEditingController();
+  final TextEditingController _relayerController = TextEditingController();
+
   final TextEditingController _recipientController = TextEditingController();
   final TextEditingController _amountController = TextEditingController();
   final TextEditingController _tokenAddressController = TextEditingController();
@@ -61,6 +66,14 @@ class _MyHomePageState extends State<MyHomePage> {
     await _clearDataOnFreshInstall();
     await _loadWallet();
     await _loadJwtToken();
+
+    // Load gasless config
+    final forwarder = await _wallet.getForwarder();
+    final relayerUrl = await _wallet.getRelayerUrl();
+    setState(() {
+      _forwarderController.text = forwarder;
+      _relayerController.text = relayerUrl;
+    });
   }
 
   Future<void> _clearDataOnFreshInstall() async {
@@ -196,21 +209,42 @@ class _MyHomePageState extends State<MyHomePage> {
       return;
     }
 
-    String? token = await _wallet.getJwtToken();
-    if (token == null || token.isEmpty) {
-      setState(() {
-        _transactionStatus = 'Please set JWT token first.';
-      });
-      return;
+    // JWT token only required for non-gasless transactions
+    if (!_useGasless) {
+      String? token = await _wallet.getJwtToken();
+      if (token == null || token.isEmpty) {
+        setState(() {
+          _transactionStatus = 'Please set JWT token first.';
+        });
+        return;
+      }
     }
 
     final BigInt amount = BigInt.from(double.parse(amountStr) * 1e18);
     setState(() {
-      _transactionStatus = 'Signing transaction...';
+      _transactionStatus = _useGasless
+          ? 'Signing gasless transaction...'
+          : 'Signing transaction...';
     });
 
     try {
-      if (_isTokenTransfer) {
+      if (_useGasless) {
+        // GASLESS PATH
+        if (_isTokenTransfer) {
+          final txHash = await _wallet.sendGaslessTokenTransfer(
+            _tokenAddressController.text,
+            recipient,
+            amount,
+          );
+          setState(() {
+            _transactionStatus = 'Gasless TX sent!\nHash: $txHash';
+          });
+        } else {
+          setState(() {
+            _transactionStatus = 'Native gasless not implemented yet';
+          });
+        }
+      } else if (_isTokenTransfer) {
         // ERC20 Token Transfer
         await _wallet.sendSignedTokenTransaction(
           _tokenAddressController.text,
@@ -328,6 +362,42 @@ class _MyHomePageState extends State<MyHomePage> {
               ),
               const SizedBox(height: 10),
 
+              const Divider(thickness: 2),
+              const SizedBox(height: 20),
+              const Text('Gasless Config:',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              TextField(
+                controller: _forwarderController,
+                decoration: const InputDecoration(
+                    labelText: "Forwarder", border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _relayerController,
+                decoration: const InputDecoration(
+                    labelText: "Relayer URL", border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton(
+                onPressed: () async {
+                  await _wallet.saveGaslessConfig(
+                      _forwarderController.text, _relayerController.text);
+                  setState(() => _transactionStatus = 'Config saved!');
+                },
+                child: const Text("Save Config"),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text('Regular'),
+                  Switch(
+                      value: _useGasless,
+                      onChanged: (v) => setState(() => _useGasless = v)),
+                  const Text('Gasless'),
+                ],
+              ),
+
               // Show token address field only for token transfers
               if (_isTokenTransfer) ...[
                 TextField(
@@ -427,11 +497,60 @@ class EthereumWallet {
 
   final String baseUrl;
 
+  String? _forwarderAddress;
+  String? _relayerUrl;
+
   EthereumWallet({
     this.baseUrl = "http://localhost:50002",
-  }) : client = Web3Client('https://rpc.testnet.jfinchain.com', Client());
+  }) : client = Web3Client('http://127.0.0.1:8545', Client());
 
   String get apiUrl => "$baseUrl/v1/customers/wallets/transactions";
+
+  Future<void> saveGaslessConfig(String forwarder, String relayer) async {
+    await _storage.write(key: 'forwarder_address', value: forwarder);
+    await _storage.write(key: 'relayer_url', value: relayer);
+    _forwarderAddress = forwarder;
+    _relayerUrl = relayer;
+  }
+
+  Future<String> sendGaslessTokenTransfer(
+    String tokenAddress,
+    String recipient,
+    BigInt amount,
+  ) async {
+    String? privateKeyHex = await _storage.read(key: 'private_key');
+    if (privateKeyHex == null) throw Exception('No private key found');
+
+    final credentials = EthPrivateKey.fromHex(privateKeyHex);
+    final from = credentials.address.hex;
+
+    final metaTx = MetaTxService(
+      relayerUrl: await getRelayerUrl(),
+      forwarderAddress: await getForwarder(),
+      chainId: 31337, // Hardhat
+    );
+
+    final signedTx = await metaTx.signTokenTransfer(
+      privateKey: credentials,
+      tokenAddress: tokenAddress,
+      from: from,
+      to: recipient,
+      amount: amount,
+    );
+
+    final result = await metaTx.relayTransaction(signedTx);
+    return result['txHash'];
+  }
+
+  Future<String> getForwarder() async {
+    _forwarderAddress ??= await _storage.read(key: 'forwarder_address');
+    return _forwarderAddress ?? '0x5FbDB2315678afecb367f032d93F642f64180aa3';
+  }
+
+  Future<String> getRelayerUrl() async {
+    _relayerUrl ??= await _storage.read(key: 'relayer_url');
+    return _relayerUrl ?? 'http://localhost:3000/api';
+  }
 
   Future<void> saveJwtToken(String token) async {
     await _storage.write(key: 'jwt_token', value: token);

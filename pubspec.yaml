@@ -41,6 +41,7 @@ dependencies:
   bip39_mnemonic: ^3.0.9
   bip32: ^2.0.0
   shared_preferences: ^2.3.2
+  pointycastle: ^3.9.1
 
 dev_dependencies:
   flutter_test:
